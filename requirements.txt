@@ -1,0 +1,3 @@
+bambu-printer-manager
+flask
+opencv-python
