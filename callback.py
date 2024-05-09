@@ -8,27 +8,23 @@ from bpm.bambuprinter import BambuPrinter
 from bpm.bambutools import parseFan, parseStage
 
 printer_data = json.load(open("printers.json"))
+printers = []
 
-for p in printer_data:
-    if (
-        "hostname" not in printer_data[p]
-        or "access_code" not in printer_data[p]
-        or "serial_number" not in printer_data[p]
-    ):
+for name in printer_data:
+    p = printer_data[name]
+    if "hostname" not in p or "access_code" not in p or "serial_number" not in p:
         print(
-            f"Error: printer config for {p} missing hostname, access_code, or serial_number"
+            f"Error: printer config for {name} missing hostname, access_code, or serial_number"
         )
         sys.exit(1)
 
-printers = []
-for p in printer_data:
     config = BambuConfig(
-        hostname=printer_data[p]["hostname"],
-        access_code=printer_data[p]["access_code"],
-        serial_number=printer_data[p]["serial_number"],
+        hostname=p["hostname"],
+        access_code=p["access_code"],
+        serial_number=p["serial_number"],
     )
     printer = BambuPrinter(config=config)
-    printers.append((p, printer))
+    printers.append((name, printer))
 
 
 def on_update(printer):
