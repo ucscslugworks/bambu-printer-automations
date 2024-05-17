@@ -14,6 +14,8 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
+import sheet
+
 # If modifying these scopes, delete the file token.json.
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
@@ -37,6 +39,8 @@ booking_statuses = [
 ]
 
 printer_statuses = ["Booked", "Printing", "Available", "Offline"]
+
+booking_index = -1
 
 try:
     printer_data = json.load(open("printers.json"))
@@ -161,20 +165,30 @@ def get_sheet_data():
         exit(1)
 
 
+def write_booking_sheet():
+    try:
+        vals = booking_data.values.tolist()
+        vals.insert(0, booking_data.columns.tolist())
+        _ = (
+            g_sheets.values()
+            .update(
+                spreadsheetId=SPREADSHEET_ID,
+                range=BOOKING_SHEET,
+                valueInputOption="USER_ENTERED",
+                body={"values": vals},
+            )
+            .execute()
+        )
+        return True
+    except HttpError as e:
+        print(e)
+        return False
+
+
 def write_status_sheet():
     try:
         vals = status_data.values.tolist()
         vals.insert(0, status_data.columns.tolist())
-        # length = len(vals)
-        # blank_filled = 0
-
-        # if student_sheet_read_len > length:
-        #     blank_filled = student_sheet_read_len - length
-        #     vals = vals + [[""] * len(student_data.columns)] * (blank_filled)
-        # else:
-        #     student_sheet_read_len = length
-
-        # for i in range(0, student_sheet_read_len, SEND_BLOCK):
         _ = (
             g_sheets.values()
             .update(
@@ -185,7 +199,26 @@ def write_status_sheet():
             )
             .execute()
         )
-        # student_sheet_read_len -= blank_filled
+        return True
+    except HttpError as e:
+        print(e)
+        return False
+
+
+def write_limits_sheet():
+    try:
+        vals = limits_data.values.tolist()
+        vals.insert(0, limits_data.columns.tolist())
+        _ = (
+            g_sheets.values()
+            .update(
+                spreadsheetId=SPREADSHEET_ID,
+                range=LIMITS_SHEET,
+                valueInputOption="USER_ENTERED",
+                body={"values": vals},
+            )
+            .execute()
+        )
         return True
     except HttpError as e:
         print(e)
@@ -193,17 +226,17 @@ def write_status_sheet():
 
 
 if __name__ == "__main__":
-
+    sheet.get_sheet_data(False)
     get_sheet_data()
 
-    print(booking_data)
-    print()
-    print(starting_data)
-    print()
-    print(status_data)
-    print()
-    print(limits_data)
-    print()
+    # print(booking_data)
+    # print()
+    # print(starting_data)
+    # print()
+    # print(status_data)
+    # print()
+    # print(limits_data)
+    # print()
 
     for name in printer_data:
         p = printer_data[name]
@@ -228,7 +261,10 @@ if __name__ == "__main__":
 
     # print(printers)
 
+    waiting_for_printer = []
     while True:
+        get_sheet_data()
+        complete_prints = []
         for i, (printer_name, printer) in enumerate(printers):
             print(f"Printer {i}: {printer_name}")
 
@@ -236,30 +272,89 @@ if __name__ == "__main__":
                 print(
                     f"last checkin: {round(time.time() - printer._lastMessageTime)}s ago"
                 )
+            print(f"print=[{printer.gcode_state}]")
 
-            print(
-                f"tool=[{round(printer.tool_temp, 1)}/{round(printer.tool_temp_target, 1)}] "
-                + f"bed=[{round(printer.bed_temp, 1)}/{round(printer.bed_temp_target, 1)}] "
-                + f"fan=[{parseFan(printer.fan_speed)}] print=[{printer.gcode_state}] speed=[{printer.speed_level}] "
-                + f"light=[{'on' if printer.light_state else 'off'}]"
-            )
-            print(
-                f"stg_cur=[{parseStage(printer.current_stage)}] file=[{printer.gcode_file}] "
-                + f"layer=[{printer.current_layer}/{printer.layer_count}] "
-                + f"%=[{printer.percent_complete}] eta=[{printer.time_remaining} min] "
-                + f"spool=[{printer.active_spool} ({printer.spool_state})]"
-            )
-            print()
+            # print(
+            #     f"tool=[{round(printer.tool_temp, 1)}/{round(printer.tool_temp_target, 1)}] "
+            #     + f"bed=[{round(printer.bed_temp, 1)}/{round(printer.bed_temp_target, 1)}] "
+            #     + f"fan=[{parseFan(printer.fan_speed)}] print=[{printer.gcode_state}] speed=[{printer.speed_level}] "
+            #     + f"light=[{'on' if printer.light_state else 'off'}]"
+            # )
+            # print(
+            #     f"stg_cur=[{parseStage(printer.current_stage)}] file=[{printer.gcode_file}] "
+            #     + f"layer=[{printer.current_layer}/{printer.layer_count}] "
+            #     + f"%=[{printer.percent_complete}] eta=[{printer.time_remaining} min] "
+            #     + f"spool=[{printer.active_spool} ({printer.spool_state})]"
+            # )
+            # print()
 
             if printer.gcode_state in ["RUNNING", "PAUSE"]:
                 status_data.loc[i, "Status"] = printer_statuses[1]
-                status_data.loc[
-                    i, "End Time"
-                ] = (datetime.datetime.now() + datetime.timedelta(
-                    minutes=printer.time_remaining
-                )).strftime("%Y-%m-%d %H:%M")
+                status_data.loc[i, "Start Time"] = datetime.datetime.fromtimestamp(
+                    printer.start_time * 60
+                ).strftime("%Y-%m-%d %H:%M")
+                status_data.loc[i, "End Time"] = (
+                    datetime.datetime.now()
+                    + datetime.timedelta(minutes=printer.time_remaining)
+                ).strftime("%Y-%m-%d %H:%M")
+            elif status_data.loc[i, "Status"] == printer_statuses[1]:
+                complete_prints.append(status_data.loc[i, "Current User"])
+
+                status_data.loc[i, "Status"] = printer_statuses[2]
+                status_data.loc[i, "Start Time"] = ""
+                status_data.loc[i, "End Time"] = ""
+                status_data.loc[i, "Current User"] = ""
+            elif status_data.loc[i, "Status"] == "":
+                status_data.loc[i, "Status"] = printer_statuses[2]
+                status_data.loc[i, "Start Time"] = ""
+                status_data.loc[i, "End Time"] = ""
+                status_data.loc[i, "Current User"] = ""
+
+            if (
+                status_data.loc[i, "Status"] == printer_statuses[2]
+                and waiting_for_printer
+            ):
+                for j, user in enumerate(waiting_for_printer):
+                    if user not in status_data["Current User"].values:
+                        status_data.loc[i, "Current User"] = waiting_for_printer.pop(j)
+                        break
+                status_data.loc[i, "Status"] = printer_statuses[0]
+                status_data.loc[i, "Start Time"] = datetime.datetime.now().strftime(
+                    "%Y-%m-%d %H:%M"
+                )
+                end_time = datetime.datetime.now() + datetime.timedelta(hours=4)
+                if end_time.hour >= 21:
+                    end_time = end_time + datetime.timedelta(
+                        hours=3 + 12
+                    )  # 3 hours + 12 hours for next day from 9pm to 12pm
+                status_data.loc[i, "End Time"] = end_time.strftime("%Y-%m-%d %H:%M")
+
+        first_active_index = -1
+
+        for i, row in booking_data.iterrows():
+            if i <= booking_index:
+                continue
+
+            cruzid = row["Email Address"].split("@")[0]
+            if row["Status"] == "":
+                if sheet.is_staff(cruzid=cruzid) or sheet.get_access(
+                    "3D Printing", cruzid=cruzid
+                ):
+                    row["Status"] = booking_statuses[0]
+                    waiting_for_printer.append(cruzid)
+                else:
+                    row["Status"] = booking_statuses[4]
+            elif row["Status"] == booking_statuses[1] and cruzid in complete_prints:
+                row["Status"] = booking_statuses[3]
+
+            if first_active_index == -1 and row["Status"] in booking_statuses[0:2]:
+                first_active_index = i
+                booking_index = i - 1
+
+        print(waiting_for_printer)
 
         print()
+        write_booking_sheet()
         write_status_sheet()
 
-        time.sleep(1)
+        time.sleep(10)
