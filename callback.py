@@ -31,6 +31,7 @@ limits_data = None
 
 booking_statuses = [
     "Waiting for Printer",
+    "Booked Printer",
     "Currently Printing",
     "Did Not Start Print",
     "Print Done",
@@ -228,19 +229,27 @@ def update_printer_status(
     printer_num: int | None,
     status_num: int | None,
     user: str | None,
-    start_time: datetime.datetime | None,
-    end_time: datetime.datetime | None,
+    start_time: datetime.datetime | str | None,
+    end_time: datetime.datetime | str | None,
 ):
     if status_num:
         status_data.loc[printer_num, "Status"] = printer_statuses[status_num]
     if user:
         status_data.loc[printer_num, "Current User"] = user
     if start_time:
-        status_data.loc[printer_num, "Start Time"] = start_time.strftime(
-            "%Y-%m-%d %H:%M"
-        )
+        if type(start_time) == datetime.datetime:
+            status_data.loc[printer_num, "Start Time"] = start_time.strftime(
+                "%Y-%m-%d %H:%M"
+            )
+        else:
+            status_data.loc[printer_num, "Start Time"] = start_time
     if end_time:
-        status_data.loc[printer_num, "End Time"] = end_time.strftime("%Y-%m-%d %H:%M")
+        if type(end_time) == datetime.datetime:
+            status_data.loc[printer_num, "End Time"] = end_time.strftime(
+                "%Y-%m-%d %H:%M"
+            )
+        else:
+            status_data.loc[printer_num, "End Time"] = end_time
 
 
 if __name__ == "__main__":
@@ -276,68 +285,63 @@ if __name__ == "__main__":
         )
 
         waiting_for_printer = []
+        currently_booked_or_printing = []
         while True:
             get_sheet_data()
+
+            # TODO: check for people who have started prints in the last 10 minutes
+
             complete_prints = []
             for i, (printer_name, printer) in enumerate(printers):
-                print(f"Printer {i}: {printer_name}")
+                # print(f"Printer {i}: {printer_name}")
 
-                if printer._lastMessageTime:
-                    print(
-                        f"last checkin: {round(time.time() - printer._lastMessageTime)}s ago"
-                    )
-                print(f"print=[{printer.gcode_state}]")
+                # if printer._lastMessageTime:
+                #     print(
+                #         f"last checkin: {round(time.time() - printer._lastMessageTime)}s ago"
+                #     )
+                # print(f"print=[{printer.gcode_state}]")
 
                 if printer.gcode_state in ["RUNNING", "PAUSE"]:
+                    # if printer is currently printing
+
+                    user = status_data.loc[i, "Current User"]
+                    # TODO: check for verifications/start sheet to determine who started print
+
                     update_printer_status(
                         i,
                         1,
-                        None,
+                        user,
                         datetime.datetime.fromtimestamp(printer.start_time * 60),
                         datetime.datetime.now()
                         + datetime.timedelta(minutes=printer.time_remaining),
                     )
-                    # status_data.loc[i, "Status"] = printer_statuses[1]
-                    # status_data.loc[i, "Start Time"] = datetime.datetime.fromtimestamp(
-                    #     printer.start_time * 60
-                    # ).strftime("%Y-%m-%d %H:%M")
-                    # status_data.loc[i, "End Time"] = (
-                    #     datetime.datetime.now()
-                    #     + datetime.timedelta(minutes=printer.time_remaining)
-                    # ).strftime("%Y-%m-%d %H:%M")
                 elif status_data.loc[i, "Status"] == printer_statuses[1]:
+                    # if printer just finished printing
                     complete_prints.append(status_data.loc[i, "Current User"])
+                    update_printer_status(i, 2, "", "", "")
+                elif status_data.loc[i, "Status"] not in printer_statuses:
+                    # if printer is not printing but no valid status is recorded
+                    update_printer_status(i, 2, "", "", "")
 
-                    status_data.loc[i, "Status"] = printer_statuses[2]
-                    status_data.loc[i, "Start Time"] = ""
-                    status_data.loc[i, "End Time"] = ""
-                    status_data.loc[i, "Current User"] = ""
-                elif status_data.loc[i, "Status"] == "":
-                    status_data.loc[i, "Status"] = printer_statuses[2]
-                    status_data.loc[i, "Start Time"] = ""
-                    status_data.loc[i, "End Time"] = ""
-                    status_data.loc[i, "Current User"] = ""
-
+                # if printer is available and someone is waiting for it
                 if (
                     status_data.loc[i, "Status"] == printer_statuses[2]
                     and waiting_for_printer
                 ):
-                    for j, user in enumerate(waiting_for_printer):
-                        if user not in status_data["Current User"].values:
-                            status_data.loc[i, "Current User"] = (
-                                waiting_for_printer.pop(j)
-                            )
-                            break
-                    status_data.loc[i, "Status"] = printer_statuses[0]
-                    status_data.loc[i, "Start Time"] = datetime.datetime.now().strftime(
-                        "%Y-%m-%d %H:%M"
-                    )
                     end_time = datetime.datetime.now() + datetime.timedelta(hours=4)
                     if end_time.hour >= 21:
-                        end_time = end_time + datetime.timedelta(
-                            hours=3 + 12
-                        )  # 3 hours + 12 hours for next day from 9pm to 12pm
-                    status_data.loc[i, "End Time"] = end_time.strftime("%Y-%m-%d %H:%M")
+                        # 3 hours + 12 hours for next day from 9pm to 12pm
+                        end_time = end_time + datetime.timedelta(hours=3 + 12)
+                    row, user = waiting_for_printer.pop(0)
+                    update_printer_status(
+                        i,
+                        0,
+                        user,
+                        datetime.datetime.now(),
+                        end_time,
+                    )
+                    currently_booked_or_printing.append(user)
+                    booking_data.loc[row, "Status"] = booking_statuses[1]
 
             first_active_index = -1
 
@@ -346,18 +350,21 @@ if __name__ == "__main__":
                     continue
 
                 cruzid = row["Email Address"].split("@")[0]
-                if row["Status"] == "":
+                if row["Status"] in ["", booking_statuses[0]]:
                     if sheet.is_staff(cruzid=cruzid) or sheet.get_access(
                         "3D Printing", cruzid=cruzid
                     ):
                         row["Status"] = booking_statuses[0]
-                        waiting_for_printer.append(cruzid)
+                        if cruzid not in currently_booked_or_printing:
+                            waiting_for_printer.append((i, cruzid))
                     else:
-                        row["Status"] = booking_statuses[4]
-                elif row["Status"] == booking_statuses[1] and cruzid in complete_prints:
-                    row["Status"] = booking_statuses[3]
+                        row["Status"] = booking_statuses[5]
+                elif row["Status"] == booking_statuses[2] and cruzid in complete_prints:
+                    row["Status"] = booking_statuses[4]
+                    complete_prints.remove(cruzid)
+                    currently_booked_or_printing.remove(cruzid)
 
-                if first_active_index == -1 and row["Status"] in booking_statuses[0:2]:
+                if first_active_index == -1 and row["Status"] in booking_statuses[0:3]:
                     first_active_index = i
                     booking_index = i - 1
 
