@@ -1,7 +1,6 @@
 import datetime
 import json
 import os
-import sys
 import time
 
 import pandas as pd
@@ -225,136 +224,149 @@ def write_limits_sheet():
         return False
 
 
-if __name__ == "__main__":
-    sheet.get_sheet_data(False)
-    get_sheet_data()
-
-    # print(booking_data)
-    # print()
-    # print(starting_data)
-    # print()
-    # print(status_data)
-    # print()
-    # print(limits_data)
-    # print()
-
-    for name in printer_data:
-        p = printer_data[name]
-        if "hostname" not in p or "access_code" not in p or "serial_number" not in p:
-            print(
-                f"Error: printer config for {name} missing hostname, access_code, or serial_number"
-            )
-            sys.exit(1)
-
-        config = BambuConfig(
-            hostname=p["hostname"],
-            access_code=p["access_code"],
-            serial_number=p["serial_number"],
+def update_printer_status(
+    printer_num: int | None,
+    status_num: int | None,
+    user: str | None,
+    start_time: datetime.datetime | None,
+    end_time: datetime.datetime | None,
+):
+    if status_num:
+        status_data.loc[printer_num, "Status"] = printer_statuses[status_num]
+    if user:
+        status_data.loc[printer_num, "Current User"] = user
+    if start_time:
+        status_data.loc[printer_num, "Start Time"] = start_time.strftime(
+            "%Y-%m-%d %H:%M"
         )
-        printer = BambuPrinter(config=config)
-        printers.append((name, printer))
-        printer.start_session()
+    if end_time:
+        status_data.loc[printer_num, "End Time"] = end_time.strftime("%Y-%m-%d %H:%M")
 
-    printers.sort(
-        key=lambda x: status_data.loc[status_data["Printer Name"] == x[0]].index[0]
-    )
 
-    # print(printers)
-
-    waiting_for_printer = []
-    while True:
+if __name__ == "__main__":
+    try:
+        sheet.get_sheet_data(False)
         get_sheet_data()
-        complete_prints = []
-        for i, (printer_name, printer) in enumerate(printers):
-            print(f"Printer {i}: {printer_name}")
 
-            if printer._lastMessageTime:
-                print(
-                    f"last checkin: {round(time.time() - printer._lastMessageTime)}s ago"
-                )
-            print(f"print=[{printer.gcode_state}]")
-
-            # print(
-            #     f"tool=[{round(printer.tool_temp, 1)}/{round(printer.tool_temp_target, 1)}] "
-            #     + f"bed=[{round(printer.bed_temp, 1)}/{round(printer.bed_temp_target, 1)}] "
-            #     + f"fan=[{parseFan(printer.fan_speed)}] print=[{printer.gcode_state}] speed=[{printer.speed_level}] "
-            #     + f"light=[{'on' if printer.light_state else 'off'}]"
-            # )
-            # print(
-            #     f"stg_cur=[{parseStage(printer.current_stage)}] file=[{printer.gcode_file}] "
-            #     + f"layer=[{printer.current_layer}/{printer.layer_count}] "
-            #     + f"%=[{printer.percent_complete}] eta=[{printer.time_remaining} min] "
-            #     + f"spool=[{printer.active_spool} ({printer.spool_state})]"
-            # )
-            # print()
-
-            if printer.gcode_state in ["RUNNING", "PAUSE"]:
-                status_data.loc[i, "Status"] = printer_statuses[1]
-                status_data.loc[i, "Start Time"] = datetime.datetime.fromtimestamp(
-                    printer.start_time * 60
-                ).strftime("%Y-%m-%d %H:%M")
-                status_data.loc[i, "End Time"] = (
-                    datetime.datetime.now()
-                    + datetime.timedelta(minutes=printer.time_remaining)
-                ).strftime("%Y-%m-%d %H:%M")
-            elif status_data.loc[i, "Status"] == printer_statuses[1]:
-                complete_prints.append(status_data.loc[i, "Current User"])
-
-                status_data.loc[i, "Status"] = printer_statuses[2]
-                status_data.loc[i, "Start Time"] = ""
-                status_data.loc[i, "End Time"] = ""
-                status_data.loc[i, "Current User"] = ""
-            elif status_data.loc[i, "Status"] == "":
-                status_data.loc[i, "Status"] = printer_statuses[2]
-                status_data.loc[i, "Start Time"] = ""
-                status_data.loc[i, "End Time"] = ""
-                status_data.loc[i, "Current User"] = ""
-
+        # set up printers
+        for name in printer_data:
+            p = printer_data[name]
             if (
-                status_data.loc[i, "Status"] == printer_statuses[2]
-                and waiting_for_printer
+                "hostname" not in p
+                or "access_code" not in p
+                or "serial_number" not in p
             ):
-                for j, user in enumerate(waiting_for_printer):
-                    if user not in status_data["Current User"].values:
-                        status_data.loc[i, "Current User"] = waiting_for_printer.pop(j)
-                        break
-                status_data.loc[i, "Status"] = printer_statuses[0]
-                status_data.loc[i, "Start Time"] = datetime.datetime.now().strftime(
-                    "%Y-%m-%d %H:%M"
+                print(
+                    f"Error: printer config for {name} missing hostname, access_code, or serial_number"
                 )
-                end_time = datetime.datetime.now() + datetime.timedelta(hours=4)
-                if end_time.hour >= 21:
-                    end_time = end_time + datetime.timedelta(
-                        hours=3 + 12
-                    )  # 3 hours + 12 hours for next day from 9pm to 12pm
-                status_data.loc[i, "End Time"] = end_time.strftime("%Y-%m-%d %H:%M")
+                exit(1)
 
-        first_active_index = -1
+            config = BambuConfig(
+                hostname=p["hostname"],
+                access_code=p["access_code"],
+                serial_number=p["serial_number"],
+            )
+            printer = BambuPrinter(config=config)
+            printers.append((name, printer))
+            printer.start_session()
 
-        for i, row in booking_data.iterrows():
-            if i <= booking_index:
-                continue
+        # sort printers by their order in the status sheet
+        printers.sort(
+            key=lambda x: status_data.loc[status_data["Printer Name"] == x[0]].index[0]
+        )
 
-            cruzid = row["Email Address"].split("@")[0]
-            if row["Status"] == "":
-                if sheet.is_staff(cruzid=cruzid) or sheet.get_access(
-                    "3D Printing", cruzid=cruzid
+        waiting_for_printer = []
+        while True:
+            get_sheet_data()
+            complete_prints = []
+            for i, (printer_name, printer) in enumerate(printers):
+                print(f"Printer {i}: {printer_name}")
+
+                if printer._lastMessageTime:
+                    print(
+                        f"last checkin: {round(time.time() - printer._lastMessageTime)}s ago"
+                    )
+                print(f"print=[{printer.gcode_state}]")
+
+                if printer.gcode_state in ["RUNNING", "PAUSE"]:
+                    update_printer_status(
+                        i,
+                        1,
+                        None,
+                        datetime.datetime.fromtimestamp(printer.start_time * 60),
+                        datetime.datetime.now()
+                        + datetime.timedelta(minutes=printer.time_remaining),
+                    )
+                    # status_data.loc[i, "Status"] = printer_statuses[1]
+                    # status_data.loc[i, "Start Time"] = datetime.datetime.fromtimestamp(
+                    #     printer.start_time * 60
+                    # ).strftime("%Y-%m-%d %H:%M")
+                    # status_data.loc[i, "End Time"] = (
+                    #     datetime.datetime.now()
+                    #     + datetime.timedelta(minutes=printer.time_remaining)
+                    # ).strftime("%Y-%m-%d %H:%M")
+                elif status_data.loc[i, "Status"] == printer_statuses[1]:
+                    complete_prints.append(status_data.loc[i, "Current User"])
+
+                    status_data.loc[i, "Status"] = printer_statuses[2]
+                    status_data.loc[i, "Start Time"] = ""
+                    status_data.loc[i, "End Time"] = ""
+                    status_data.loc[i, "Current User"] = ""
+                elif status_data.loc[i, "Status"] == "":
+                    status_data.loc[i, "Status"] = printer_statuses[2]
+                    status_data.loc[i, "Start Time"] = ""
+                    status_data.loc[i, "End Time"] = ""
+                    status_data.loc[i, "Current User"] = ""
+
+                if (
+                    status_data.loc[i, "Status"] == printer_statuses[2]
+                    and waiting_for_printer
                 ):
-                    row["Status"] = booking_statuses[0]
-                    waiting_for_printer.append(cruzid)
-                else:
-                    row["Status"] = booking_statuses[4]
-            elif row["Status"] == booking_statuses[1] and cruzid in complete_prints:
-                row["Status"] = booking_statuses[3]
+                    for j, user in enumerate(waiting_for_printer):
+                        if user not in status_data["Current User"].values:
+                            status_data.loc[i, "Current User"] = (
+                                waiting_for_printer.pop(j)
+                            )
+                            break
+                    status_data.loc[i, "Status"] = printer_statuses[0]
+                    status_data.loc[i, "Start Time"] = datetime.datetime.now().strftime(
+                        "%Y-%m-%d %H:%M"
+                    )
+                    end_time = datetime.datetime.now() + datetime.timedelta(hours=4)
+                    if end_time.hour >= 21:
+                        end_time = end_time + datetime.timedelta(
+                            hours=3 + 12
+                        )  # 3 hours + 12 hours for next day from 9pm to 12pm
+                    status_data.loc[i, "End Time"] = end_time.strftime("%Y-%m-%d %H:%M")
 
-            if first_active_index == -1 and row["Status"] in booking_statuses[0:2]:
-                first_active_index = i
-                booking_index = i - 1
+            first_active_index = -1
 
-        print(waiting_for_printer)
+            for i, row in booking_data.iterrows():
+                if i <= booking_index:
+                    continue
 
-        print()
-        write_booking_sheet()
-        write_status_sheet()
+                cruzid = row["Email Address"].split("@")[0]
+                if row["Status"] == "":
+                    if sheet.is_staff(cruzid=cruzid) or sheet.get_access(
+                        "3D Printing", cruzid=cruzid
+                    ):
+                        row["Status"] = booking_statuses[0]
+                        waiting_for_printer.append(cruzid)
+                    else:
+                        row["Status"] = booking_statuses[4]
+                elif row["Status"] == booking_statuses[1] and cruzid in complete_prints:
+                    row["Status"] = booking_statuses[3]
 
-        time.sleep(10)
+                if first_active_index == -1 and row["Status"] in booking_statuses[0:2]:
+                    first_active_index = i
+                    booking_index = i - 1
+
+            print(waiting_for_printer)
+
+            print()
+            write_booking_sheet()
+            write_status_sheet()
+
+            time.sleep(10)
+    except KeyboardInterrupt:
+        exit(0)
