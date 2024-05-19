@@ -33,14 +33,33 @@ booking_statuses = [
     "Waiting for Printer",
     "Booked Printer",
     "Currently Printing",
+    "Supervised Printing",
     "Did Not Start Print",
     "Print Done",
     "Not Certified",
 ]
 
-printer_statuses = ["Booked", "Printing", "Available", "Offline"]
+USER_WAITING = 0
+USER_BOOKED = 1
+USER_PRINTING = 2
+USER_SUPERVISED = 3
+USER_NO_START = 4
+USER_DONE = 5
+USER_NOT_CERTIFIED = 6
 
-booking_index = -1
+printer_statuses = ["Booked", "Printing", "Available", "Offline", "Cancel Pending"]
+
+PRINTER_BOOKED = 0
+PRINTER_PRINTING = 1
+PRINTER_AVAILABLE = 2
+PRINTER_OFFLINE = 3
+PRINTER_CANCEL_PENDING = 4
+
+booking_index = 0
+
+BOOKING_TIME = 4  # hours
+MAX_TOOL_TEMP = 220  # degrees Celsius
+TIME_TO_START = 10  # minutes
 
 try:
     printer_data = json.load(open("printers.json"))
@@ -185,6 +204,26 @@ def write_booking_sheet():
         return False
 
 
+def write_starting_sheet():
+    try:
+        vals = starting_data.values.tolist()
+        vals.insert(0, starting_data.columns.tolist())
+        _ = (
+            g_sheets.values()
+            .update(
+                spreadsheetId=SPREADSHEET_ID,
+                range=STARTING_SHEET,
+                valueInputOption="USER_ENTERED",
+                body={"values": vals},
+            )
+            .execute()
+        )
+        return True
+    except HttpError as e:
+        print(e)
+        return False
+
+
 def write_status_sheet():
     try:
         vals = status_data.values.tolist()
@@ -232,18 +271,18 @@ def update_printer_status(
     start_time: datetime.datetime | str | None,
     end_time: datetime.datetime | str | None,
 ):
-    if status_num:
+    if status_num is not None:
         status_data.loc[printer_num, "Status"] = printer_statuses[status_num]
-    if user:
+    if user is not None:
         status_data.loc[printer_num, "Current User"] = user
-    if start_time:
+    if start_time is not None:
         if type(start_time) == datetime.datetime:
             status_data.loc[printer_num, "Start Time"] = start_time.strftime(
                 "%Y-%m-%d %H:%M"
             )
         else:
             status_data.loc[printer_num, "Start Time"] = start_time
-    if end_time:
+    if end_time is not None:
         if type(end_time) == datetime.datetime:
             status_data.loc[printer_num, "End Time"] = end_time.strftime(
                 "%Y-%m-%d %H:%M"
@@ -279,19 +318,43 @@ if __name__ == "__main__":
             printers.append((name, printer))
             printer.start_session()
 
+        if len(printers) != len(status_data):
+            print(
+                f"Error: number of printers in printers.json ({len(printers)}) does not match number of printers in status sheet ({len(status_data)})"
+            )
+            exit(1)
+
         # sort printers by their order in the status sheet
         printers.sort(
             key=lambda x: status_data.loc[status_data["Printer Name"] == x[0]].index[0]
         )
 
-        waiting_for_printer = []
-        currently_booked_or_printing = []
+        waiting_for_printer = []  # users who are waiting for printer
+        waiting_for_printer_rows = (
+            dict()
+        )  # row numbers (in booking_data) of users who are waiting for printer
+        currently_booked_or_printing = []  # users who are currently booked or printing
+        currently_booked_or_printing_rows = (
+            dict()
+        )  # row numbers (in booking_data) of users who are currently booked or printing
+
+        print_without_booking = (
+            []
+        )  # printers that have started prints without a booking
+        print_without_booking_data = (
+            dict()
+        )  # data for printers that have started prints without a booking - printer num, start time
+        print_with_booking = []  # printers that have started prints with a booking
+        print_with_booking_data = (
+            dict()
+        )  # data for printers that have started prints with a booking - printer num, user, row number in booking_data, start time
+
         while True:
             get_sheet_data()
-
-            # TODO: check for people who have started prints in the last 10 minutes
+            timestamp = datetime.datetime.now()
 
             complete_prints = []
+
             for i, (printer_name, printer) in enumerate(printers):
                 # print(f"Printer {i}: {printer_name}")
 
@@ -301,77 +364,227 @@ if __name__ == "__main__":
                 #     )
                 # print(f"print=[{printer.gcode_state}]")
 
+                # if status_data.loc[i, "Status"] == printer_statuses[PRINTER_PRINTING]:
+                #     user = status_data.loc[i, "Current User"]
+                #     print(
+                #         timestamp,
+                #         timestamp - datetime.timedelta(minutes=TIME_TO_START),
+                #         datetime.datetime.strptime(
+                #             status_data.loc[i, "Start Time"].strip() + ":00",
+                #             "%Y-%m-%d %H:%M:%S",
+                #         ),
+                #         datetime.datetime.strptime(
+                #             status_data.loc[i, "Start Time"].strip() + ":00",
+                #             "%Y-%m-%d %H:%M:%S",
+                #         )
+                #         <= timestamp - datetime.timedelta(minutes=TIME_TO_START),
+                #         user.strip(),
+                #         not user.strip()
+                #     )
+                #     if user.strip():
+                #         print(
+                #             booking_data.loc[
+                #                 currently_booked_or_printing_rows[user], "Status"
+                #             ]
+                #             == booking_statuses[USER_BOOKED]
+                #         )
+
                 if printer.gcode_state in ["RUNNING", "PAUSE"]:
                     # if printer is currently printing
 
                     user = status_data.loc[i, "Current User"]
-                    # TODO: check for verifications/start sheet to determine who started print
+
+                    if (
+                        status_data.loc[i, "Status"]
+                        == printer_statuses[PRINTER_PRINTING]
+                    ) and (
+                        (
+                            datetime.datetime.strptime(
+                                status_data.loc[i, "Start Time"].strip() + ":00",
+                                "%Y-%m-%d %H:%M:%S",
+                            )
+                            <= timestamp - datetime.timedelta(minutes=TIME_TO_START)
+                            and (
+                                not user.strip()
+                                or booking_data.loc[
+                                    currently_booked_or_printing_rows[user], "Status"
+                                ]
+                                == booking_statuses[USER_BOOKED]
+                            )
+                        )
+                        or (printer.tool_temp_target > MAX_TOOL_TEMP)
+                    ):
+                        # if printer has been printing for more than 10 minutes and no user is recorded, or they didn't submit a start form, or the tool temp is too high
+                        # TODO: cancel print
+                        # TODO: send email
+                        print("cancel!")
+                        status_data.loc[i, "Status"] = printer_statuses[
+                            PRINTER_CANCEL_PENDING
+                        ]
+
+                    if (
+                        status_data.loc[i, "Status"]
+                        == printer_statuses[PRINTER_AVAILABLE]
+                    ):
+                        print_without_booking.append(printer_name)
+                        print_without_booking_data[printer_name] = (
+                            i,
+                            datetime.datetime.fromtimestamp(printer.start_time * 60),
+                        )
+                    elif (
+                        status_data.loc[i, "Status"] == printer_statuses[PRINTER_BOOKED]
+                    ):
+                        print_with_booking.append(printer_name)
+                        print_with_booking_data[printer_name] = (
+                            i,
+                            user,
+                            currently_booked_or_printing_rows[user],
+                            datetime.datetime.fromtimestamp(printer.start_time * 60),
+                        )
 
                     update_printer_status(
                         i,
-                        1,
+                        (
+                            PRINTER_PRINTING
+                            if status_data.loc[i, "Status"]
+                            != printer_statuses[PRINTER_CANCEL_PENDING]
+                            else None
+                        ),
                         user,
                         datetime.datetime.fromtimestamp(printer.start_time * 60),
-                        datetime.datetime.now()
-                        + datetime.timedelta(minutes=printer.time_remaining),
+                        timestamp + datetime.timedelta(minutes=printer.time_remaining),
                     )
-                elif status_data.loc[i, "Status"] == printer_statuses[1]:
+                elif status_data.loc[i, "Status"] == printer_statuses[PRINTER_PRINTING]:
                     # if printer just finished printing
-                    complete_prints.append(status_data.loc[i, "Current User"])
-                    update_printer_status(i, 2, "", "", "")
+                    if status_data.loc[i, "Current User"].strip():
+                        complete_prints.append(status_data.loc[i, "Current User"])
+                    update_printer_status(i, PRINTER_AVAILABLE, "", "", "")
                 elif status_data.loc[i, "Status"] not in printer_statuses:
                     # if printer is not printing but no valid status is recorded
-                    update_printer_status(i, 2, "", "", "")
+                    update_printer_status(i, PRINTER_AVAILABLE, "", "", "")
 
                 # if printer is available and someone is waiting for it
                 if (
-                    status_data.loc[i, "Status"] == printer_statuses[2]
+                    status_data.loc[i, "Status"] == printer_statuses[PRINTER_AVAILABLE]
                     and waiting_for_printer
                 ):
-                    end_time = datetime.datetime.now() + datetime.timedelta(hours=4)
+                    start_time = timestamp
+                    if start_time.hour >= 21:
+                        start_time = datetime.datetime.combine(
+                            timestamp.date(), datetime.datetime.min.time()
+                        ) + datetime.timedelta(days=1, hours=12)
+                    end_time = start_time + datetime.timedelta(hours=BOOKING_TIME)
                     if end_time.hour >= 21:
                         # 3 hours + 12 hours for next day from 9pm to 12pm
                         end_time = end_time + datetime.timedelta(hours=3 + 12)
-                    row, user = waiting_for_printer.pop(0)
+
+                    user = waiting_for_printer.pop(0)
+                    row = waiting_for_printer_rows.pop(user)
                     update_printer_status(
                         i,
-                        0,
+                        PRINTER_BOOKED,
                         user,
-                        datetime.datetime.now(),
+                        start_time,
                         end_time,
                     )
                     currently_booked_or_printing.append(user)
-                    booking_data.loc[row, "Status"] = booking_statuses[1]
+                    currently_booked_or_printing_rows[user] = row
+                    booking_data.loc[row, "Status"] = booking_statuses[USER_BOOKED]
+                    # TODO: send email to user
+                    print("booked!")
+                elif status_data.loc[i, "Status"] == printer_statuses[
+                    PRINTER_BOOKED
+                ] and timestamp >= datetime.datetime.strptime(
+                    status_data.loc[i, "End Time"].strip() + ":00", "%Y-%m-%d %H:%M:%S"
+                ):
+                    # if printer is booked but booking time has expired
+                    user = status_data.loc[i, "Current User"]
+                    row = currently_booked_or_printing_rows.pop(user)
+                    update_printer_status(i, PRINTER_AVAILABLE, "", "", "")
+                    booking_data.loc[row, "Status"] = booking_statuses[USER_NO_START]
 
-            first_active_index = -1
-
-            for i, row in booking_data.iterrows():
-                if i <= booking_index:
+            for i in starting_data.index.values[::-1]:
+                # print(starting_data.loc[i])
+                if datetime.datetime.strptime(
+                    starting_data.loc[i, "Timestamp"], "%Y-%m-%d %H:%M:%S"
+                ) <= timestamp - datetime.timedelta(minutes=TIME_TO_START):
+                    break
+                if starting_data.loc[i, "Handled"] == "TRUE":
                     continue
+                cruzid = starting_data.loc[i, "Email Address"].split("@")[0].strip()
+                printer = starting_data.loc[i, "Printer"]
 
+                print(printer, cruzid, print_without_booking, print_with_booking)
+
+                if printer in print_without_booking and sheet.is_staff(cruzid=cruzid):
+                    printer_num, start_time = print_without_booking_data[printer]
+                    update_printer_status(printer_num, None, cruzid, None, None)
+                    print_without_booking.remove(printer)
+                    print_without_booking_data.pop(printer)
+                    starting_data.loc[i, "Handled"] = "TRUE"
+                elif printer in print_with_booking:
+                    printer_num, user, row, start_time = print_with_booking_data[
+                        printer
+                    ]
+                    if cruzid == user.strip():
+                        booking_data.loc[row, "Status"] = booking_statuses[
+                            USER_PRINTING
+                        ]
+                        starting_data.loc[i, "Handled"] = "TRUE"
+                    elif sheet.is_staff(cruzid=cruzid):
+                        booking_data.loc[row, "Status"] = booking_statuses[
+                            USER_SUPERVISED
+                        ]
+                        print_with_booking.remove(printer)
+                        print_with_booking_data.pop(printer)
+                        starting_data.loc[i, "Handled"] = "TRUE"
+
+            found_first_active_index = False
+
+            print("complete", complete_prints)
+            print("current", currently_booked_or_printing)
+            print("current_rows", currently_booked_or_printing_rows)
+
+            for i, row in booking_data.iloc[booking_index:].iterrows():
                 cruzid = row["Email Address"].split("@")[0]
-                if row["Status"] in ["", booking_statuses[0]]:
+                if row["Status"] in ["", booking_statuses[USER_WAITING]]:
                     if sheet.is_staff(cruzid=cruzid) or sheet.get_access(
                         "3D Printing", cruzid=cruzid
                     ):
-                        row["Status"] = booking_statuses[0]
-                        if cruzid not in currently_booked_or_printing:
-                            waiting_for_printer.append((i, cruzid))
+                        row["Status"] = booking_statuses[USER_WAITING]
+                        if (
+                            cruzid not in currently_booked_or_printing
+                            and cruzid not in waiting_for_printer
+                        ):
+                            waiting_for_printer.append(cruzid)
+                            waiting_for_printer_rows[cruzid] = i
+                            # TODO: send email to user
+                            print("waiting!")
                     else:
-                        row["Status"] = booking_statuses[5]
-                elif row["Status"] == booking_statuses[2] and cruzid in complete_prints:
-                    row["Status"] = booking_statuses[4]
+                        row["Status"] = booking_statuses[USER_NOT_CERTIFIED]
+                elif (
+                    row["Status"] == booking_statuses[USER_PRINTING]
+                    and cruzid in complete_prints
+                ):
+                    row["Status"] = booking_statuses[USER_DONE]
                     complete_prints.remove(cruzid)
                     currently_booked_or_printing.remove(cruzid)
+                    currently_booked_or_printing_rows.pop(cruzid)
 
-                if first_active_index == -1 and row["Status"] in booking_statuses[0:3]:
-                    first_active_index = i
-                    booking_index = i - 1
+                if (
+                    not found_first_active_index
+                    and row["Status"]
+                    in booking_statuses[USER_WAITING : (USER_PRINTING + 1)]
+                ):
+                    found_first_active_index = True
+                    booking_index = i
 
-            print(waiting_for_printer)
+            print("waiting", waiting_for_printer)
+            print("waiting_rows", waiting_for_printer_rows)
 
             print()
             write_booking_sheet()
+            write_starting_sheet()
             write_status_sheet()
 
             time.sleep(10)
