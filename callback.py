@@ -392,6 +392,8 @@ if __name__ == "__main__":
                     + f"spool=[{printer.active_spool} ({printer.spool_state})]"
                 )
                 print()
+                print(status_data.loc[i])
+                print()
 
                 if printer.gcode_state in ["RUNNING", "PAUSE"]:
                     # if printer is currently printing
@@ -551,6 +553,9 @@ if __name__ == "__main__":
                     update_printer_status(i, PRINTER_AVAILABLE, "", "", "")
                     # update booking status in booking sheet to did not start print
                     booking_data.loc[row, "Status"] = booking_statuses[USER_NO_START]
+            
+            print(status_data.loc[i])
+            print()
 
             for i in starting_data.index.values[::-1]:
                 # iterate through starting data in reverse order
