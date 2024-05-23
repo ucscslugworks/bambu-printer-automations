@@ -708,10 +708,13 @@ if __name__ == "__main__":
                 ):
                     time.sleep(1)
 
-            except:
+            except Exception as e:
+                if type(e) == KeyboardInterrupt:
+                    raise e
                 print("Error")
 
     except KeyboardInterrupt:
+        print("Exiting...")
         for _, printer in printers:
             printer.quit()
         exit(0)
