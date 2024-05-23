@@ -341,7 +341,7 @@ if __name__ == "__main__":
         # clear all printer statuses
         for i, _ in enumerate(printers):
             update_printer_status(i, PRINTER_AVAILABLE, "", "", "")
-        
+
         write_status_sheet()
 
         waiting_for_printer = []  # users who are waiting for printer
@@ -717,7 +717,7 @@ if __name__ == "__main__":
             except Exception as e:
                 if type(e) == KeyboardInterrupt:
                     raise e
-                print("Error")
+                print(f"Error: {e}")
 
     except KeyboardInterrupt:
         print("Exiting...")
