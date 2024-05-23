@@ -338,6 +338,12 @@ if __name__ == "__main__":
             key=lambda x: status_data.loc[status_data["Printer Name"] == x[0]].index[0]
         )
 
+        # clear all printer statuses
+        for i, _ in enumerate(printers):
+            update_printer_status(i, PRINTER_AVAILABLE, "", "", "")
+        
+        write_status_sheet()
+
         waiting_for_printer = []  # users who are waiting for printer
         waiting_for_printer_rows = (
             dict()
