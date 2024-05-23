@@ -712,4 +712,6 @@ if __name__ == "__main__":
                 print("Error")
 
     except KeyboardInterrupt:
+        for _, printer in printers:
+            printer.quit()
         exit(0)
