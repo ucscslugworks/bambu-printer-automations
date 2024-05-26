@@ -6,7 +6,7 @@ import time
 import pandas as pd
 from bpm.bambuconfig import BambuConfig
 from bpm.bambuprinter import BambuPrinter
-from bpm.bambutools import parseFan, parseStage
+from bpm.bambutools import PrinterState, parseFan, parseStage
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
@@ -23,11 +23,13 @@ BOOKING_SHEET = "Booking"
 STARTING_SHEET = "Starting"
 STATUS_SHEET = "Printer Status"
 LIMITS_SHEET = "Filament Limits"
+LIMITS_RESET_DATE_SHEET = "Filament Limits Reset Date"
 
 booking_data = None
 starting_data = None
 status_data = None
 limits_data = None
+limit_reset_date = None
 
 booking_statuses = [
     "Waiting for Printer",
@@ -246,6 +248,7 @@ def write_status_sheet():
 
 def write_limits_sheet():
     try:
+        limits_data.sort_values(by="CruzID", inplace=True)
         vals = limits_data.values.tolist()
         vals.insert(0, limits_data.columns.tolist())
         _ = (
@@ -258,6 +261,66 @@ def write_limits_sheet():
             )
             .execute()
         )
+        return True
+    except HttpError as e:
+        print(e)
+        return False
+
+
+def get_limits_reset_date():
+    global limit_reset_date
+    try:
+        reset_date = (
+            g_sheets.values()
+            .get(spreadsheetId=SPREADSHEET_ID, range=LIMITS_RESET_DATE_SHEET)
+            .execute()
+        )
+
+        values = reset_date.get("values", [])
+
+        if not values:
+            print("No reset date found.")
+            limit_reset_date = None
+            return
+
+        limit_reset_date = datetime.datetime.strptime(
+            values[0][0] + " 00:00:00", "%m/%d/%Y %H:%M:%S"
+        )
+    except HttpError as e:
+        print(e)
+        exit(1)
+
+
+def clear_limits_sheet():
+    global limits_data
+    try:
+        _ = (
+            g_sheets.values()
+            .clear(
+                spreadsheetId=SPREADSHEET_ID,
+                range=LIMITS_SHEET + "!A2:B",
+            )
+            .execute()
+        )
+        limits_data = pd.DataFrame(columns=limits_data.columns)
+        return True
+    except HttpError as e:
+        print(e)
+        return False
+
+
+def clear_limits_reset_date():
+    global limit_reset_date
+    try:
+        _ = (
+            g_sheets.values()
+            .clear(
+                spreadsheetId=SPREADSHEET_ID,
+                range=LIMITS_RESET_DATE_SHEET,
+            )
+            .execute()
+        )
+        limit_reset_date = None
         return True
     except HttpError as e:
         print(e)
@@ -291,12 +354,40 @@ def update_printer_status(
             status_data.loc[printer_num, "End Time"] = end_time
 
 
+def print_weight(cruzid, weight):
+    global limits_data
+    if not weight:
+        return None
+    weight = int(weight)
+    if limits_data.empty or cruzid not in limits_data.loc[:, "CruzID"].values:
+        row = pd.DataFrame([{"CruzID": cruzid, "Limit (grams)": 1000}])
+        limits_data = pd.concat([limits_data, row], ignore_index=True)
+
+    remaining = int(
+        limits_data.loc[limits_data.loc[:, "CruzID"] == cruzid, "Limit (grams)"].values[
+            0
+        ]
+    )
+
+    if weight > remaining:
+        return False
+    else:
+        limits_data.loc[limits_data.loc[:, "CruzID"] == cruzid, "Limit (grams)"] = (
+            remaining - weight
+        )
+        return True
+
+
 if __name__ == "__main__":
     try:
         # get data from Access Card sheet (3D printer access, staff members)
         sheet.get_sheet_data(False)
         # get data from printer automations sheet (bookings, startings, statuses, limits, logs)
         get_sheet_data()
+
+        # clear all printer statuses
+        for i, _ in enumerate(printers):
+            update_printer_status(i, PRINTER_AVAILABLE, "", "", "")
 
         # set up printers
         for name in printer_data:
@@ -325,6 +416,13 @@ if __name__ == "__main__":
             printers.append((name, printer))
             # start session with printer
             printer.start_session()
+            if printer.state == PrinterState.QUIT:
+                print(f"Error: could not connect to {name} at {p['hostname']}")
+                status_data.loc[status_data["Printer Name"] == name, "Status"] = (
+                    printer_statuses[PRINTER_OFFLINE]
+                )
+            else:
+                print(f"Connected to {name} at {p['hostname']}")
 
         # check if number of printers in printers.json matches number of printers in status sheet
         if len(printers) != len(status_data):
@@ -338,10 +436,7 @@ if __name__ == "__main__":
             key=lambda x: status_data.loc[status_data["Printer Name"] == x[0]].index[0]
         )
 
-        # clear all printer statuses
-        for i, _ in enumerate(printers):
-            update_printer_status(i, PRINTER_AVAILABLE, "", "", "")
-
+        # write available/offline status to sheet
         write_status_sheet()
 
         waiting_for_printer = []  # users who are waiting for printer
@@ -366,14 +461,28 @@ if __name__ == "__main__":
             dict()
         )  # data for printers that have started prints with a booking - printer num, user (from status_data), row number in booking_data, start time
 
+        printer_over_limit = (
+            []
+        )  # printers that have started prints with a booking but are over their weight limit
+
         while True:
             try:
+
                 # get data from Access Card sheet (3D printer access, staff members)
                 sheet.get_sheet_data(False)
+
                 # get data from printer automations sheet (bookings, startings, statuses, limits, logs)
                 get_sheet_data()
+
                 # get current timestamp to be used for calculations
                 timestamp = datetime.datetime.now()
+
+                # check if the limits reset date has passed
+                get_limits_reset_date()
+                if limit_reset_date is not None and timestamp >= limit_reset_date:
+                    # if the limits reset date has passed, clear the limits sheet and reset the reset date
+                    clear_limits_sheet()
+                    clear_limits_reset_date()
 
                 # list of users who have completed their prints and their row numbers
                 complete_prints = []
@@ -431,9 +540,31 @@ if __name__ == "__main__":
                                 printer.tool_temp_target > MAX_TOOL_TEMP
                                 and not sheet.is_staff(cruzid=user.strip())
                             )
-                            # or (not limits_data.empty and not sheet.is_staff(cruzid=user.strip() and limits_data.loc[user.strip(), "Limits (grams)"])
+                            or (i in printer_over_limit)
                         ):
-                            # if printer has been printing for more than 10 minutes and no user is recorded, or they didn't submit a start form, or the tool temp is too high (and they're not staff)
+                            reason = ""
+                            if not user.strip():
+                                reason = "no user"
+                            elif (
+                                booking_data.loc[
+                                    currently_booked_or_printing_rows[user],
+                                    "Status",
+                                ]
+                                == booking_statuses[USER_BOOKED]
+                            ):
+                                reason = "start form not submitted"
+                            elif (
+                                printer.tool_temp_target > MAX_TOOL_TEMP
+                                and not sheet.is_staff(cruzid=user.strip())
+                            ):
+                                reason = "tool temp too high"
+                            elif i in printer_over_limit:
+                                reason = "over weight limit"
+
+                            # if printer has been printing for more than 10 minutes and no user is recorded
+                            # or they didn't submit a start form
+                            # or the tool temp is too high (and they're not staff)
+                            # or they're over their weight limit
                             # TODO: cancel print
                             # TODO: send email
                             # TODO: log cancelation
@@ -581,7 +712,7 @@ if __name__ == "__main__":
                     # iterate through starting data in reverse order
 
                     if datetime.datetime.strptime(
-                        starting_data.loc[i, "Timestamp"], "%Y-%m-%d %H:%M:%S"
+                        starting_data.loc[i, "Timestamp"], "%m/%d/%Y %H:%M:%S"
                     ) <= timestamp - datetime.timedelta(minutes=TIME_TO_START):
                         # if the starting data is more than 10 minutes old, stop iterating
                         break
@@ -590,9 +721,10 @@ if __name__ == "__main__":
                         # if the starting data has already been handled, skip
                         continue
 
-                    # get cruzid and printer number from starting data
+                    # get cruzid, printer name, and weight (grams) from starting data
                     cruzid = starting_data.loc[i, "Email Address"].split("@")[0].strip()
                     printer = starting_data.loc[i, "Printer"]
+                    weight = starting_data.loc[i, "Weight"]
 
                     # print(printer, cruzid, print_without_booking, print_with_booking)
 
@@ -625,6 +757,10 @@ if __name__ == "__main__":
                             print_with_booking_data.pop(printer)
                             # set starting data to handled
                             starting_data.loc[i, "Handled"] = "TRUE"
+
+                            if not print_weight(cruzid, weight):
+                                # if the user has exceeded their weight limit
+                                printer_over_limit.append(printer_num)
                             # TODO: log print
                         elif sheet.is_staff(cruzid=cruzid):
                             # if the user who started the print is staff
@@ -637,6 +773,10 @@ if __name__ == "__main__":
                             print_with_booking_data.pop(printer)
                             # set starting data to handled
                             starting_data.loc[i, "Handled"] = "TRUE"
+
+                            if not print_weight(cruzid, weight):
+                                # if the user has exceeded their weight limit
+                                printer_over_limit.append(printer_num)
                             # TODO: log print
 
                 # boolean to check if the first active index has been found
@@ -708,6 +848,7 @@ if __name__ == "__main__":
                 write_booking_sheet()
                 write_starting_sheet()
                 write_status_sheet()
+                write_limits_sheet()
 
                 while datetime.datetime.now() < timestamp + datetime.timedelta(
                     seconds=10
@@ -718,9 +859,11 @@ if __name__ == "__main__":
                 if type(e) == KeyboardInterrupt:
                     raise e
                 print(f"Error: {e}")
+                time.sleep(1)
 
     except KeyboardInterrupt:
         print("Exiting...")
         for _, printer in printers:
-            printer.quit()
+            if printer.state != PrinterState.QUIT:
+                printer.quit()
         exit(0)
