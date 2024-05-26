@@ -14,6 +14,7 @@ from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
 import sheet
+from gmail import gmail_send_message
 
 # If modifying these scopes, delete the file token.json.
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
@@ -62,6 +63,10 @@ booking_index = 0
 BOOKING_TIME = 4  # hours
 MAX_TOOL_TEMP = 220  # degrees Celsius
 TIME_TO_START = 10  # minutes
+
+EMAIL_SENDER = "imadan1@ucsc.edu"
+EMAIL_CC = "jbarbera@ucsc.edu"
+EMAIL_REPLY_TO = "jbarbera@ucsc.edu"
 
 try:
     printer_data = json.load(open("printers.json"))
@@ -467,7 +472,6 @@ if __name__ == "__main__":
 
         while True:
             try:
-
                 # get data from Access Card sheet (3D printer access, staff members)
                 sheet.get_sheet_data(False)
 
@@ -507,8 +511,6 @@ if __name__ == "__main__":
                         + f"%=[{printer.percent_complete}] eta=[{printer.time_remaining} min] "
                         + f"spool=[{printer.active_spool} ({printer.spool_state})]"
                     )
-                    print()
-                    print(status_data.loc[i])
                     print()
 
                     if printer.gcode_state in ["RUNNING", "PAUSE"]:
@@ -559,14 +561,23 @@ if __name__ == "__main__":
                             ):
                                 reason = "tool temp too high"
                             elif i in printer_over_limit:
-                                reason = "over weight limit"
+                                reason = "over quarterly filament limit"
 
                             # if printer has been printing for more than 10 minutes and no user is recorded
                             # or they didn't submit a start form
                             # or the tool temp is too high (and they're not staff)
                             # or they're over their weight limit
                             # TODO: cancel print
-                            # TODO: send email
+                            # printer.stop_printing()
+                            if user.strip():
+                                gmail_send_message(
+                                    recipient=user.strip() + "@ucsc.edu",
+                                    sender=EMAIL_SENDER,
+                                    subject="Slugworks 3D Printing - Print Canceled",
+                                    body=f"Your print on {printer_name} was canceled because: {reason}. Please contact Slugworks staff if you have any questions.",
+                                    cc=EMAIL_CC,
+                                    reply_to=EMAIL_REPLY_TO,
+                                )
                             # TODO: log cancelation
                             print("cancel!")
                             status_data.loc[i, "Status"] = printer_statuses[
@@ -651,7 +662,14 @@ if __name__ == "__main__":
                         # get start time for booking
                         start_time = timestamp
 
-                        if start_time.hour >= 21:
+                        if start_time.weekday() > 4:
+                            # if the start time is on a weekend, set start time to 12pm the next Monday
+                            start_time = datetime.datetime.combine(
+                                timestamp.date(), datetime.datetime.min.time()
+                            ) + datetime.timedelta(
+                                days=(7 - start_time.weekday()), hours=12
+                            )
+                        elif start_time.hour >= 21:
                             # if the start time is after 9pm, set start time to 12pm the next day
                             start_time = datetime.datetime.combine(
                                 timestamp.date(), datetime.datetime.min.time()
@@ -665,8 +683,14 @@ if __name__ == "__main__":
                         # get end time for booking
                         end_time = start_time + datetime.timedelta(hours=BOOKING_TIME)
                         if end_time.hour >= 21:
+                            # if the end time is after 9pm
                             # 3 hours + 12 hours for next day from 9pm to 12pm
                             end_time = end_time + datetime.timedelta(hours=3 + 12)
+                            if end_time.weekday() > 4:
+                                # if the end time is on a weekend, set end time to the same time the next Monday
+                                end_time += datetime.timedelta(
+                                    days=(7 - end_time.weekday())
+                                )
 
                         # get first user waiting for a printer
                         user = waiting_for_printer.pop(0)
@@ -685,8 +709,15 @@ if __name__ == "__main__":
                         currently_booked_or_printing_rows[user] = row
                         # update booking status in booking sheet
                         booking_data.loc[row, "Status"] = booking_statuses[USER_BOOKED]
-                        # TODO: send email to user
-                        # TODO: log booking
+                        today = end_time.date() == timestamp.date()
+                        gmail_send_message(
+                            recipient=user + "@ucsc.edu",
+                            sender=EMAIL_SENDER,
+                            subject="Slugworks 3D Printing - Booked",
+                            body=f"It's your turn to print on {printer_name}! Start your print before {end_time.strftime('%I:%M %p')} on {end_time.strftime('%m/%d')}.",
+                            cc=EMAIL_CC,
+                            reply_to=EMAIL_REPLY_TO,
+                        )
                         print("booked!")
                     elif status_data.loc[i, "Status"] == printer_statuses[
                         PRINTER_BOOKED
@@ -704,9 +735,6 @@ if __name__ == "__main__":
                         booking_data.loc[row, "Status"] = booking_statuses[
                             USER_NO_START
                         ]
-
-                print(status_data.loc[i])
-                print()
 
                 for i in starting_data.index.values[::-1]:
                     # iterate through starting data in reverse order
@@ -782,10 +810,6 @@ if __name__ == "__main__":
                 # boolean to check if the first active index has been found
                 found_first_active_index = False
 
-                # print("complete", complete_prints)
-                # print("current", currently_booked_or_printing)
-                # print("current_rows", currently_booked_or_printing_rows)
-
                 for i, row in booking_data.iloc[booking_index:].iterrows():
                     # iterate through booking data starting from the first active index
                     # get cruzid from email address
@@ -806,7 +830,14 @@ if __name__ == "__main__":
                                 # add the user to the list of users waiting for a printer & save the row number
                                 waiting_for_printer.append(cruzid)
                                 waiting_for_printer_rows[cruzid] = i
-                                # TODO: send email to user
+                                gmail_send_message(
+                                    recipient=cruzid + "@ucsc.edu",
+                                    sender=EMAIL_SENDER,
+                                    subject="Slugworks 3D Printing - Waiting",
+                                    body="You are now waiting for a 3D printer at Slugworks. You will receive an email when a printer is booked for you to use.",
+                                    cc=EMAIL_CC,
+                                    reply_to=EMAIL_REPLY_TO,
+                                )
                                 # TODO: log addition to queue
                                 print("waiting!")
                         else:
