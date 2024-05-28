@@ -682,7 +682,7 @@ if __name__ == "__main__":
 
                         # get end time for booking
                         end_time = start_time + datetime.timedelta(hours=BOOKING_TIME)
-                        if end_time.hour >= 21:
+                        if end_time.hour >= 21 or end_time.hour < 12:
                             # if the end time is after 9pm
                             # 3 hours + 12 hours for next day from 9pm to 12pm
                             end_time = end_time + datetime.timedelta(hours=3 + 12)

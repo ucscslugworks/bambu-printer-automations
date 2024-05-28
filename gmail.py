@@ -85,8 +85,10 @@ Thank you for requesting an invite to the Autoslug Discord server. We are excite
 Thank you,
 Ishan"""
     gmail_send_message(
-        "India Spott <espott@ucsc.edu>",
+        "Ishan Madan <imadan1@ucsc.edu>",
         "Ishan Madan <imadan1@ucsc.edu>",
         "Autoslug Discord Invite",
         body,
+        "",
+        ""
     )
