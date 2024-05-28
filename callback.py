@@ -80,7 +80,7 @@ if not os.path.exists(path + "/logs"):
     os.makedirs(path + "/logs")
 
 # create new logger with all levels
-logger = logging.getLogger("callback")
+logger = logging.getLogger("root")
 logger.setLevel(logging.DEBUG) 
 
 # create file handler which logs debug messages (and above - everything)
