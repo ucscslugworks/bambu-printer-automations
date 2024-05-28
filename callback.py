@@ -1,5 +1,6 @@
 import datetime
 import json
+import logging
 import os
 import time
 
@@ -70,10 +71,46 @@ EMAIL_REPLY_TO = ""
 # EMAIL_CC = "jbarbera@ucsc.edu"
 # EMAIL_REPLY_TO = "jbarbera@ucsc.edu"
 
+# Set the working directory to the directory of this file
+path = os.path.dirname(os.path.abspath(__file__))
+os.chdir(path)
+
+# Create a new directory for logs if it doesn't exist
+if not os.path.exists(path + "/logs"):
+    os.makedirs(path + "/logs")
+
+# create new logger with all levels
+logger = logging.getLogger("callback")
+logger.setLevel(logging.DEBUG) 
+
+# create file handler which logs debug messages (and above - everything)
+fh = logging.FileHandler(f"logs/{str(datetime.datetime.now())}.log")
+fh.setLevel(logging.DEBUG)
+
+# create console handler which only logs warnings (and above)
+ch = logging.StreamHandler()
+ch.setLevel(logging.WARNING)
+
+# create formatter and add it to the handlers
+formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s: %(message)s")
+fh.setFormatter(formatter)
+ch.setFormatter(formatter)
+
+# add the handlers to the logger
+logger.addHandler(fh)
+logger.addHandler(ch)
+# logging.basicConfig(
+#     filename=f"logs/{str(datetime.datetime.now().date())}.log",
+#     encoding="utf-8",
+#     level=logging.DEBUG,
+#     format="%(asctime)s - %(name)s - %(levelname)s: %(message)s",
+#     force=True,
+# )
+
 try:
     printer_data = json.load(open("printers.json"))
 except FileNotFoundError:
-    print("No printers.json file found.")
+    logger.error("No printers.json file found.")
     exit(1)
 
 printers = []
@@ -85,7 +122,7 @@ creds = None
 if os.path.exists("token.json"):
     creds = Credentials.from_authorized_user_file("token.json", SCOPES)
 elif not os.path.exists("credentials.json"):
-    print("No credentials.json file found.")
+    logger.error("No credentials.json file found.")
     exit(1)
 # If there are no (valid) credentials available, let the user log in (assuming credentials.json exists).
 if not creds or not creds.valid:
@@ -105,7 +142,7 @@ try:
     g_sheets = service.spreadsheets()
 
 except HttpError as e:
-    print(e)
+    logger.error(e)
     exit(1)
 
 
@@ -121,7 +158,7 @@ def get_sheet_data():
         values = booking.get("values", [])
 
         if not values:
-            print("No booking data found.")
+            logger.error("No booking data found.")
             exit(1)
 
         values = [r + [""] * (len(values[0]) - len(r)) for r in values]
@@ -140,7 +177,7 @@ def get_sheet_data():
         values = starting.get("values", [])
 
         if not values:
-            print("No starting data found.")
+            logger.error("No starting data found.")
             exit(1)
 
         values = [r + [""] * (len(values[0]) - len(r)) for r in values]
@@ -159,7 +196,7 @@ def get_sheet_data():
         values = status.get("values", [])
 
         if not values:
-            print("No status data found.")
+            logger.error("No status data found.")
             exit(1)
 
         values = [r + [""] * (len(values[0]) - len(r)) for r in values]
@@ -178,7 +215,7 @@ def get_sheet_data():
         values = limits.get("values", [])
 
         if not values:
-            print("No limits data found.")
+            logger.error("No limits data found.")
             exit(1)
 
         values = [r + [""] * (len(values[0]) - len(r)) for r in values]
@@ -189,7 +226,7 @@ def get_sheet_data():
         )
 
     except HttpError as e:
-        print(e)
+        logger.error(e)
         exit(1)
 
 
@@ -209,7 +246,7 @@ def write_booking_sheet():
         )
         return True
     except HttpError as e:
-        print(e)
+        logger.error(e)
         return False
 
 
@@ -229,7 +266,7 @@ def write_starting_sheet():
         )
         return True
     except HttpError as e:
-        print(e)
+        logger.error(e)
         return False
 
 
@@ -249,7 +286,7 @@ def write_status_sheet():
         )
         return True
     except HttpError as e:
-        print(e)
+        logger.error(e)
         return False
 
 
@@ -270,7 +307,7 @@ def write_limits_sheet():
         )
         return True
     except HttpError as e:
-        print(e)
+        logger.error(e)
         return False
 
 
@@ -286,7 +323,7 @@ def get_limits_reset_date():
         values = reset_date.get("values", [])
 
         if not values:
-            print("No reset date found.")
+            logger.error("No reset date found.")
             limit_reset_date = None
             return
 
@@ -294,7 +331,7 @@ def get_limits_reset_date():
             values[0][0] + " 00:00:00", "%m/%d/%Y %H:%M:%S"
         )
     except HttpError as e:
-        print(e)
+        logger.error(e)
         exit(1)
 
 
@@ -312,7 +349,7 @@ def clear_limits_sheet():
         limits_data = pd.DataFrame(columns=limits_data.columns)
         return True
     except HttpError as e:
-        print(e)
+        logger.error(e)
         return False
 
 
@@ -330,7 +367,7 @@ def clear_limits_reset_date():
         limit_reset_date = None
         return True
     except HttpError as e:
-        print(e)
+        logger.error(e)
         return False
 
 
@@ -406,7 +443,7 @@ if __name__ == "__main__":
                 or "access_code" not in p
                 or "serial_number" not in p
             ):
-                print(
+                logger.error(
                     f"Error: printer config for {name} missing hostname, access_code, or serial_number"
                 )
                 exit(1)
@@ -424,16 +461,16 @@ if __name__ == "__main__":
             # start session with printer
             printer.start_session()
             if printer.state == PrinterState.QUIT:
-                print(f"Error: could not connect to {name} at {p['hostname']}")
+                logger.error(f"Error: could not connect to {name} at {p['hostname']}")
                 status_data.loc[status_data["Printer Name"] == name, "Status"] = (
                     printer_statuses[PRINTER_OFFLINE]
                 )
             else:
-                print(f"Connected to {name} at {p['hostname']}")
+                logger.info(f"Connected to {name} at {p['hostname']}")
 
         # check if number of printers in printers.json matches number of printers in status sheet
         if len(printers) != len(status_data):
-            print(
+            logger.error(
                 f"Error: number of printers in printers.json ({len(printers)}) does not match number of printers in status sheet ({len(status_data)})"
             )
             exit(1)
@@ -494,26 +531,24 @@ if __name__ == "__main__":
                 complete_prints = []
 
                 for i, (printer_name, printer) in enumerate(printers):
-                    print(f"Printer {i}: {printer_name}")
+                    logger.info(f"Printer {i}: {printer_name}")
 
-                    # if printer._lastMessageTime:
-                    #     print(
-                    #         f"last checkin: {round(time.time() - printer._lastMessageTime)}s ago"
-                    #     )
-                    # print(f"print=[{printer.gcode_state}]")
-                    print(
+                    if printer._lastMessageTime:
+                        logger.info(
+                            f"last checkin: {round(time.time() - printer._lastMessageTime)}s ago"
+                        )
+                    logger.debug(
                         f"tool=[{round(printer.tool_temp, 1)}/{round(printer.tool_temp_target, 1)}] "
                         + f"bed=[{round(printer.bed_temp, 1)}/{round(printer.bed_temp_target, 1)}] "
                         + f"fan=[{parseFan(printer.fan_speed)}] print=[{printer.gcode_state}] speed=[{printer.speed_level}] "
                         + f"light=[{'on' if printer.light_state else 'off'}]"
                     )
-                    print(
+                    logger.debug(
                         f"stg_cur=[{parseStage(printer.current_stage)}] file=[{printer.gcode_file}] "
                         + f"layer=[{printer.current_layer}/{printer.layer_count}] "
                         + f"%=[{printer.percent_complete}] eta=[{printer.time_remaining} min] "
                         + f"spool=[{printer.active_spool} ({printer.spool_state})]"
                     )
-                    print()
 
                     if printer.gcode_state in ["RUNNING", "PAUSE"]:
                         # if printer is currently printing
@@ -581,7 +616,7 @@ if __name__ == "__main__":
                                     reply_to=EMAIL_REPLY_TO,
                                 )
                             # TODO: log cancelation
-                            print("cancel!")
+                            logger.warning("cancel! - " + reason)
                             status_data.loc[i, "Status"] = printer_statuses[
                                 PRINTER_CANCEL_PENDING
                             ]
@@ -720,7 +755,7 @@ if __name__ == "__main__":
                             cc=EMAIL_CC,
                             reply_to=EMAIL_REPLY_TO,
                         )
-                        print("booked!")
+                        logger.warning("booked!")
                     elif status_data.loc[i, "Status"] == printer_statuses[
                         PRINTER_BOOKED
                     ] and timestamp >= datetime.datetime.strptime(
@@ -755,8 +790,6 @@ if __name__ == "__main__":
                     cruzid = starting_data.loc[i, "Email Address"].split("@")[0].strip()
                     printer = starting_data.loc[i, "Printer"]
                     weight = starting_data.loc[i, "Weight"]
-
-                    # print(printer, cruzid, print_without_booking, print_with_booking)
 
                     if printer in print_without_booking and sheet.is_staff(
                         cruzid=cruzid
@@ -841,7 +874,7 @@ if __name__ == "__main__":
                                     reply_to=EMAIL_REPLY_TO,
                                 )
                                 # TODO: log addition to queue
-                                print("waiting!")
+                                logger.warning("waiting!")
                         else:
                             # if the user is not staff and does not have access to 3D printing
                             # set the user to not certified
@@ -873,10 +906,6 @@ if __name__ == "__main__":
                         found_first_active_index = True
                         booking_index = i
 
-                # print("waiting", waiting_for_printer)
-                # print("waiting_rows", waiting_for_printer_rows)
-
-                # print()
                 # write data to sheets
                 write_booking_sheet()
                 write_starting_sheet()
@@ -891,7 +920,7 @@ if __name__ == "__main__":
             except Exception as e:
                 if type(e) == KeyboardInterrupt:
                     raise e
-                print(f"Error: {e}")
+                logger.error(f"Error: {e}")
                 time.sleep(60)
 
     except KeyboardInterrupt:

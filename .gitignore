@@ -339,3 +339,4 @@ $RECYCLE.BIN/
 *.jsonl
 
 sheet.py
+logs/
