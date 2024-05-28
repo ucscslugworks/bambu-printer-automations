@@ -99,13 +99,6 @@ ch.setFormatter(formatter)
 # add the handlers to the logger
 logger.addHandler(fh)
 logger.addHandler(ch)
-# logging.basicConfig(
-#     filename=f"logs/{str(datetime.datetime.now().date())}.log",
-#     encoding="utf-8",
-#     level=logging.DEBUG,
-#     format="%(asctime)s - %(name)s - %(levelname)s: %(message)s",
-#     force=True,
-# )
 
 try:
     printer_data = json.load(open("printers.json"))
