@@ -65,8 +65,10 @@ MAX_TOOL_TEMP = 220  # degrees Celsius
 TIME_TO_START = 10  # minutes
 
 EMAIL_SENDER = "imadan1@ucsc.edu"
-EMAIL_CC = "jbarbera@ucsc.edu"
-EMAIL_REPLY_TO = "jbarbera@ucsc.edu"
+EMAIL_CC = ""
+EMAIL_REPLY_TO = ""
+# EMAIL_CC = "jbarbera@ucsc.edu"
+# EMAIL_REPLY_TO = "jbarbera@ucsc.edu"
 
 try:
     printer_data = json.load(open("printers.json"))
