@@ -84,8 +84,12 @@ logger = logging.getLogger("root")
 logger.setLevel(logging.DEBUG) 
 
 # create file handler which logs debug messages (and above - everything)
-fh = logging.FileHandler(f"logs/{str(datetime.datetime.now())}.log")
-fh.setLevel(logging.DEBUG)
+fh_debug = logging.FileHandler(f"logs/{str(datetime.datetime.now())}-debug.log")
+fh_debug.setLevel(logging.DEBUG)
+
+# create file handler which logs only info messages (and above)
+fh_info = logging.FileHandler(f"logs/{str(datetime.datetime.now())}-info.log")
+fh_info.setLevel(logging.DEBUG)
 
 # create console handler which only logs warnings (and above)
 ch = logging.StreamHandler()
@@ -93,11 +97,13 @@ ch.setLevel(logging.WARNING)
 
 # create formatter and add it to the handlers
 formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s: %(message)s")
-fh.setFormatter(formatter)
+fh_debug.setFormatter(formatter)
+fh_info.setFormatter(formatter)
 ch.setFormatter(formatter)
 
 # add the handlers to the logger
-logger.addHandler(fh)
+logger.addHandler(fh_debug)
+logger.addHandler(fh_info)
 logger.addHandler(ch)
 
 try:
